@@ -1,19 +1,50 @@
 module lms;
 
-interface Box {}
+class Box {
+    // replace value of this box with another, may throw if cannot do that
+    void replace(Box another) {
+        throw new LmsException("Internal error - cannot replace contents of this lifted value");
+    }
+}
 
-// Stage is equivalent to DI container (or rather DI is simple late-binding + basic form of staging)
-// but the composition and execution of them is independent
-// and encapsulated by Lift!T interface
-interface Stage {
-    /// Lift a simple constant
-    Lift!T lift(T)(T value) {
-        return new Constant!T(value);
+/// Lift a simple constant
+Lift!T lift(T)(T value) 
+if (!is(T : Lift!U, U)){
+    return new Constant!T(value);
+}
+
+/// ditto
+Lift!T lift(T)(Lift!T lifted) {
+    return lifted;
+}
+
+/**
+    Stage is equivalent to DI container (or rather DI is simple late-binding + basic form of staging)
+    but the composition and execution of them is independent
+    and encapsulated by Lift!T interface
+    
+    A user is expected to sub-class and define custom stages as needed. See also `BasicStage`.
+*/
+interface Stage {    
+    /// Lift a placeholder - slot for concrete value to be filled in at a later stage
+    Slot!T slot(T)(string name) {
+        auto lifted = new Slot!T(name);
+        register(name, typeid(T), lifted);
+        return lifted;
     }
 
-    /// Lift a placeholder - slot for concrete value to be filled in at a later stage
-    Lift!T slot(T)() {
-        return new Slot!T();
+    /// Register existing slot at this _stage_ with name `name`
+    Slot!T slot(T)(string name, Slot!T value) {
+        register(name, typeid(T), value);
+        value.reset();
+        return value;
+    }
+
+    /// Register existing slot at this _stage_ with original name
+    Slot!T slot(T)(Slot!T value) {
+        register(value.name, typeid(T), value);
+        value.reset();
+        return value;
     }
 
     /// Try to evaluate (lower) lifted value using this stage
@@ -25,13 +56,38 @@ interface Stage {
     auto partial(T)(Lift!T value) {
         return value.partial(this);
     }
+
+    void register(T)(Slot!T slot) {
+        register(slot.name, typeid(T));
+    }
+
+    /// This is an implementation hook - bind must check that typeinfo matches and bind value to the lifted slot
+    void bind(string name, Box value);
+
+    /// This is an implementation hook - register must save name,typeinfo pair to check type matching later
+    void register(string name, TypeInfo info, Box box);
 }
 
-// run-time Stage container
-class Runtime : Stage { }
+/**
+    Simple stage that keeps slots as key-value pairs in built-in AA.
 
-// compile-time Stage container
-class CompileTime : Stage { }
+    Could be used as is or as an example to build your own stage(s).
+*/
+class BasicStage : Stage { 
+    override void register(string name, TypeInfo info, Box box) {
+        if (name in slots) throw new LmsNameConflict("This stage already has slot for '"~name~"' variable");
+        slots[name] = info;
+        slotValues[name] = box;
+    }
+
+    override void bind(string name, Box lifted) {
+        if (name !in slotValues) throw new LmsNameResolution("This stage doesn't have '"~name~"' variable");
+        slotValues[name].replace(lifted);
+    }
+
+    private TypeInfo[string] slots;
+    private Box[string] slotValues;
+}
 
 // Lifted value of type T
 abstract class Lift(T) : Box {
@@ -47,9 +103,27 @@ abstract class Lift(T) : Box {
     final Lift!U flatMap(U)(Lift!U delegate(T) mapFunc) {
         return new FlatMapped!(T, U)(this, mapFunc);
     }
+
+    ///
+    auto opBinary(string op, U)(U rhsV)
+    if (!is(U : Lift!V, V)) {
+        return map((lhsV){
+            return mixin("lhsV "~op~" rhsV");
+        });
+    }
+
+    ///
+    auto opBinary(string op, U)(U rhs) 
+    if (is(U : Lift!V, V)) {
+        return flatMap((lhsV) {
+            return rhs.map((rhsV) {
+                return mixin("lhsV "~op~" rhsV");
+            });
+        });
+    }
 }
 
-// Simpliest of all - just a constant, stays the same, regardless of stage
+/// Simpliest of all - just a constant, stays the same, regardless of _stage_
 class Constant(T) : Lift!T {
     this(T value) {
         this.value = value;
@@ -66,8 +140,39 @@ class Constant(T) : Lift!T {
     private T value;
 }
 
+/// Slot - a placeholder for value, that will be provided at a later _stage_
+class Slot(T) : Lift!T {
+    this(string name) {
+        _name = name;
+        reset();
+    }
+
+    override void replace(Box another) {
+        expr = cast(Lift!T)another;
+    }
+
+    void reset() {
+        expr = lift(T.init).map(delegate T (string x){
+            throw new LmsEvaluationFailed("slot "~_name~" has no bound value at this stage");
+        });
+    }
+
+    override T eval(Stage stage) {
+        return expr.eval(stage);
+    }
+
+    override Lift!T partial(Stage stage) {
+        return expr.partial(stage);
+    }
+
+    string name() { return _name; }
+
+    private string _name;
+    private Lift!T expr;
+}
+
 // Lifted map function call
-class Mapped(T, U) : Lift!U {
+private class Mapped(T, U) : Lift!U {
     this(Lift!T arg, U delegate(T) func) {
         this.liftedArg = arg;
         this.func = func;
@@ -87,7 +192,7 @@ class Mapped(T, U) : Lift!U {
     private U delegate(T) func;
 }
 
-class FlatMapped(T, U) : Lift!U {
+private class FlatMapped(T, U) : Lift!U {
     this(Lift!T arg, Lift!U delegate(T) func) {
         this.liftedArg = arg;
         this.func = func;
@@ -107,48 +212,65 @@ class FlatMapped(T, U) : Lift!U {
     private Lift!U delegate(T) func;
 }
 
-// Lifted unary operation
-class Unary(T, string op) : Lift!T {
-    this(Lifted!T operand) {
-        this.value = operand;
+class LmsException : Exception {
+    this(string message) {
+        super(message);
     }
-
-    T eval(Stage stage) {
-        return mixin(op ~ "value.eval(stage)");
-    }
-
-    Lift!T partial(Stage stage) {
-        return value.partial(stage).map((x){
-            return mixin(op ~ "x");
-        });
-    }
-
-    private Lift!T value;
 }
 
-// Lifted binary operaton
-class Binary(T, string op) : Lift!T {
-    this(Lifted!T lhs, Lifted!T rhs) {
-        this.lhs = lhs;
-        this.rhs = rhs;
+class LmsNameResolution : LmsException {
+    this(string message) {
+        super(message);
     }
-
-    T eval(Stage stage) {
-        return mixin("lhs.get(stage) "~op~"rhs.get(stage)");
-    }
-
-    Lift!T partial(Stage stage) {
-        auto newLhs = lhs.partial();
-        auto newRhs = rhs.partial();
-        //TODO: compute value if both sides are const
-        return new Binary(newLhs, newRhs);
-    }
-
-    private Lifted!T lhs, rhs;
 }
 
+class LmsNameConflict : LmsNameResolution {
+    this(string message){
+        super(message);
+    }
+}
+
+class LmsEvaluationFailed : LmsException {
+    this(string message){
+        super(message);
+    }
+}
+
+version(unittest) {
+    void assertThrows(T)(lazy T expr) {
+        try {
+            expr;
+        }
+        catch(LmsException e) {
+            return;
+        }
+        assert(0, expr.stringof ~ " should throw but didn't!");
+    }
+}
+
+@("basics")
 unittest {
-    auto stage = new CompileTime();
-    auto value = stage.lift(40);// + 2;
-    assert(stage.eval(value) == 40);
+    auto stage = new BasicStage();
+    auto value = lift(40) + 2;
+    assert(stage.eval(value) == 42);
+}
+
+@("slots")
+unittest {
+    auto stage = new BasicStage();
+    auto slot = stage.slot!string("some.slot");
+    assert(slot.name == "some.slot");
+    auto expr = slot ~ ", world!";
+    assertThrows(stage.eval(expr));
+    
+    stage.bind("some.slot", lift("Hello"));
+    assert(stage.eval(expr) == "Hello, world!");
+
+    auto laterStage = new BasicStage();
+    laterStage.slot(slot);
+    assertThrows(laterStage.eval(slot));
+
+    laterStage.bind("some.slot", lift("Bye"));
+
+    assert(stage.eval(expr) == "Bye, world!");
 }

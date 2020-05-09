@@ -248,6 +248,7 @@ version(unittest) {
     }
 }
 
+///
 @("basics")
 unittest {
     auto stage = new BasicStage();
@@ -255,6 +256,7 @@ unittest {
     assert(stage.eval(value) == 42);
 }
 
+///
 @("slots")
 unittest {
     auto stage = new BasicStage();

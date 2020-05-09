@@ -29,20 +29,20 @@ interface Stage {
     /// Lift a placeholder - slot for concrete value to be filled in at a later stage
     Slot!T slot(T)(string name) {
         auto lifted = new Slot!T(name);
-        register(name, typeid(T), lifted);
+        register(name, lifted);
         return lifted;
     }
 
     /// Register existing slot at this _stage_ with name `name`
     Slot!T slot(T)(string name, Slot!T value) {
-        register(name, typeid(T), value);
+        register(name, value);
         value.reset();
         return value;
     }
 
     /// Register existing slot at this _stage_ with original name
     Slot!T slot(T)(Slot!T value) {
-        register(value.name, typeid(T), value);
+        register(value.name, value);
         value.reset();
         return value;
     }
@@ -53,19 +53,29 @@ interface Stage {
     }
 
     /// Do partial evaluation for lifted value, this folds all known-constant sub-tries and optimizes expressions
-    auto partial(T)(Lift!T value) {
+    auto partial(U)(U value) 
+    if (!is(U : Slot!T, T)) {
         return value.partial(this);
+    }
+
+    ///ditto
+    auto partial(U)(U value)
+    if (is(U : Slot!T, T)) {
+        return cast(Lift!T)this[value];
     }
 
     void register(T)(Slot!T slot) {
         register(slot.name, typeid(T));
     }
 
-    /// This is an implementation hook - bind must check that typeinfo matches and bind value to the lifted slot
-    void bind(string name, Box value);
-
     /// This is an implementation hook - register must save name,typeinfo pair to check type matching later
-    void register(string name, TypeInfo info, Box box);
+    void register(string name, Box box);
+
+    /// This is an implementation hook - bind must check that typeinfo matches and bind value to the lifted slot
+    Box opIndexAssign(Box value, string name);
+
+    /// Third implementation hook - lookup bound value for a given name
+    Box opIndex(string name);
 }
 
 /**
@@ -74,19 +84,25 @@ interface Stage {
     Could be used as is or as an example to build your own stage(s).
 */
 class BasicStage : Stage { 
-    override void register(string name, TypeInfo info, Box box) {
+    override void register(string name, Box box) {
         if (name in slots) throw new LmsNameConflict("This stage already has slot for '"~name~"' variable");
-        slots[name] = info;
-        slotValues[name] = box;
+        slots[name] = box;
     }
 
-    override void bind(string name, Box lifted) {
-        if (name !in slotValues) throw new LmsNameResolution("This stage doesn't have '"~name~"' variable");
-        slotValues[name].replace(lifted);
+    override Box opIndexAssign(Box lifted, string name) {
+        auto p = name in slots;
+        if (!p) throw new LmsNameResolution("This stage doesn't have '"~name~"' variable");
+        slots[name].replace(lifted);
+        return lifted;
     }
 
-    private TypeInfo[string] slots;
-    private Box[string] slotValues;
+    override Box opIndex(string name) {
+        auto p = name in slots;
+        if (!p) throw new LmsNameResolution("This stage doesn't have '"~name~"' variable");
+        return slots[name];
+    }
+
+    private Box[string] slots;
 }
 
 // Lifted value of type T
@@ -152,7 +168,7 @@ class Slot(T) : Lift!T {
     }
 
     void reset() {
-        expr = lift(T.init).map(delegate T (string x){
+        expr = lift(T.init).map(delegate T (T x){
             throw new LmsEvaluationFailed("slot "~_name~" has no bound value at this stage");
         });
     }
@@ -162,7 +178,7 @@ class Slot(T) : Lift!T {
     }
 
     override Lift!T partial(Stage stage) {
-        return expr.partial(stage);
+        return expr;
     }
 
     string name() { return _name; }
@@ -183,9 +199,11 @@ private class Mapped(T, U) : Lift!U {
     }
 
     override Lift!U partial(Stage stage) {
-        return liftedArg.partial(stage).map((arg){
-            return func(arg);
-        });
+        import std.stdio : writeln;
+        auto v = liftedArg.partial(stage);
+        auto c = cast(Constant!T)v;
+        if (c) return lift(func(c.eval(stage)));
+        return v.map(func);
     }
 
     private Lift!T liftedArg;
@@ -265,14 +283,40 @@ unittest {
     auto expr = slot ~ ", world!";
     assertThrows(stage.eval(expr));
     
-    stage.bind("some.slot", lift("Hello"));
+    stage["some.slot"] =  lift("Hello");
     assert(stage.eval(expr) == "Hello, world!");
 
     auto laterStage = new BasicStage();
     laterStage.slot(slot);
     assertThrows(laterStage.eval(slot));
 
-    laterStage.bind("some.slot", lift("Bye"));
+    laterStage["some.slot"] = lift("Bye");
 
     assert(stage.eval(expr) == "Bye, world!");
+}
+
+
+///
+@("partial evaluation")
+unittest {
+    auto stage = new BasicStage();
+    int[] trace; // our primitive trace buffer
+    auto v1 = stage.slot!double("var1").map(delegate double(double x) {
+        trace ~= 1;
+        return x;
+    });
+    auto v2 = stage.slot!double("var2").map(delegate double(double x) {
+        trace ~= 2;
+        return x;
+    });
+    stage["var1"] = lift(1.5);
+    auto part = (v1 + v2).partial(stage);
+    stage["var2"] = lift(-0.5);
+    // first pass - both map functions called once
+    assert(part.eval(stage) == 1.0);
+    assert(trace == [1, 2]);
+
+    // second pass - only v2 is evaluated
+    assert(part.eval(stage) == 1.0);
+    assert(trace == [1, 2, 2]);
 }

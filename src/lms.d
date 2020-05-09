@@ -1,3 +1,22 @@
+/**
+    Light-Weight Modular staging library for D langauge.
+
+    Popularization of dependency injection framework somehow shaded
+    the bigger and more general technique - staging and staged computation.
+
+    This library ractifies that omission for the D language.
+    
+    
+    Built with love based on the ideas in the paper:
+    
+    Lightweight Modular Staging: A Pragmatic Approach to
+    Runtime Code Generation and Compiled DSLs 
+    by Tiark Rompf and Martin Odersky.
+
+    The above paper and many other good ones by Scala team at EPFL
+    are here https://scala-lang.org/old/node/143.
+*/
+
 module lms;
 
 class Box {

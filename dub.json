@@ -1,0 +1,9 @@
+{
+	"description": "D Lightweight Modular Staging meta-programming library",
+	"license": "BSD",
+	"authors": [
+		"Dmitry Olshansky"
+	],
+	"copyright": "Copyright © 2020, Dmitry Olshansky",
+	"name": "dlms"
+}

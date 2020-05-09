@@ -339,3 +339,17 @@ unittest {
     assert(part.eval(stage) == 1.0);
     assert(trace == [1, 2, 2]);
 }
+
+///
+@("CTFE")
+unittest {
+    enum result = () {
+        auto stage = new BasicStage();
+        auto s = stage.slot!int("int");
+        stage["int"] = lift(123);
+        auto s2 = lift(2);
+        //auto s3 = s + s2; // somehow fails.. to be fixed soon
+        return stage.eval(s);
+    }();
+    static assert(result == 123);
+}

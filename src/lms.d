@@ -1,5 +1,5 @@
 /**
-    Light-Weight Modular staging library for D langauge.
+    Lightweight Modular Staging library for D langauge.
 
     Popularization of dependency injection framework somehow shaded
     the bigger and more general technique - staging and staged computation.
@@ -15,6 +15,33 @@
 
     The above paper and many other good ones by Scala team at EPFL
     are here https://scala-lang.org/old/node/143.
+
+
+    Synopsis
+
+    ---
+    auto stage = new BasicStage();
+    int[] trace; // our primitive trace buffer
+    auto v1 = stage.slot!double("var1").map(delegate double(double x) {
+        trace ~= 1;
+        return x;
+    });
+    auto v2 = stage.slot!double("var2").map(delegate double(double x) {
+        trace ~= 2;
+        return x;
+    });
+    stage["var1"] = lift(1.5);
+    auto part = (v1 + v2).partial(stage);
+    stage["var2"] = lift(-0.5);
+    // first pass - both map functions called once
+    assert(part.eval(stage) == 1.0);
+    assert(trace == [1, 2]);
+
+    // second pass - only v2 is evaluated
+    assert(part.eval(stage) == 1.0);
+    assert(trace == [1, 2, 2]);
+    ---
+
 */
 
 module lms;

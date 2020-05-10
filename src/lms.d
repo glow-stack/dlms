@@ -14,7 +14,7 @@
     by Tiark Rompf and Martin Odersky.
 
     The above paper and many other good ones by Scala team at EPFL
-    are here https://scala-lang.org/old/node/143.
+    are here http://infoscience.epfl.ch/record/150347/files/gpce63-rompf.pdf.
 
 
     Synopsis

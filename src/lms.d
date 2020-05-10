@@ -54,14 +54,22 @@ class Box {
 }
 
 /// Lift a simple constant
-Lift!T lift(T)(T value) 
-if (!is(T : Lift!U, U)){
-    return new Constant!T(value);
+auto lift(T)(T value) {
+    static if(is(T : Box))  {
+        return value;
+    }
+    else
+        return new Constant!T(value);
 }
 
-/// ditto
-Lift!T lift(T)(Lift!T lifted) {
-    return lifted;
+template Unlift(T)
+{
+    static if(is(T : Lift!V, V))
+    {
+        alias Unlift = V;
+    }
+    else
+        alias Unlift = T;
 }
 
 /**
@@ -167,21 +175,8 @@ abstract class Lift(T) : Box {
     }
 
     ///
-    auto opBinary(string op, U)(U rhsV)
-    if (!is(U : Lift!V, V)) {
-        return map((lhsV){
-            return mixin("lhsV "~op~" rhsV");
-        });
-    }
-
-    ///
-    auto opBinary(string op, U)(U rhs) 
-    if (is(U : Lift!V, V)) {
-        return flatMap((lhsV) {
-            return rhs.map((rhsV) {
-                return mixin("lhsV "~op~" rhsV");
-            });
-        });
+    auto opBinary(string op, U)(U rhs) {
+        return new Binary!(op, T, Unlift!U)(this, lift(rhs));
     }
 }
 
@@ -200,6 +195,31 @@ class Constant(T) : Lift!T {
     }
     
     private T value;
+}
+
+class Binary(string op, T, U) : Lift!T {
+    this(Lift!T lhs, Lift!U rhs) {
+        left = lhs;
+        right = rhs;
+    }
+
+    override T eval(Stage stage) {
+        auto calculate(T x, U y){
+            return mixin("x "~op~" y");
+        }
+        auto vl = left.eval(stage);
+        auto vr = right.eval(stage);
+        return calculate(vl, vr);
+    }
+
+    override Lift!T partial(Stage stage) {
+        auto pl = left.partial(stage);
+        auto pr = right.partial(stage);
+        return new Binary!(op, T, U)(pl, pr);
+    }
+
+    private Lift!T left;
+    private Lift!U right;
 }
 
 /// Slot - a placeholder for value, that will be provided at a later _stage_
@@ -375,8 +395,9 @@ unittest {
         auto s = stage.slot!int("int");
         stage["int"] = lift(123);
         auto s2 = lift(2);
-        //auto s3 = s + s2; // somehow fails.. to be fixed soon
-        return stage.eval(s);
+        // somehow fails.. to be fixed soon
+        auto s3 = s + s2;
+        return stage.eval(s3);
     }();
-    static assert(result == 123);
+    static assert(result == 125);
 }
